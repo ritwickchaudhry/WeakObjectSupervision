@@ -84,7 +84,7 @@ def im_detect(net, image, rois):
         pred_boxes = clip_boxes(pred_boxes, image.shape)
     else:
         # Simply repeat the boxes, once for each class
-        pred_boxes = np.tile(boxes, (1, scores.shape[1]))
+        pred_boxes = np.tile(boxes, (1, scores.shape[1])) # R x (4x20)
 
     return scores, pred_boxes
 

@@ -122,8 +122,14 @@ best_prec1 = 0
 global_step = 0
 idx_to_class = {}
 
-def worker_init_fn(worker_id):                                                          
-	np.random.seed(np.random.get_state()[1][0] + worker_id)
+# Taken from - https://github.com/pytorch/pytorch/issues/5059
+# def worker_init_fn(worker_id):                                                          
+# 	np.random.seed(np.random.get_state()[1][0] + worker_id)
+
+# Set random seed
+SEED = 42
+np.random.seed(42)
+torch.manual_seed(42)
 
 def main():
 	global args, best_prec1, global_step, idx_to_class
@@ -172,7 +178,7 @@ def main():
 	# Data loading code
 	# TODO: Write code for IMDBDataset in custom.py
 	trainval_imdb = get_imdb('voc_2007_trainval')
-	
+	# NOTE:Done
 	class_to_idx = trainval_imdb._class_to_ind
 	idx_to_class = {v:k for k,v in class_to_idx.items()}
 
@@ -260,6 +266,7 @@ def process_image(img):
 	return img
 
 #TODO: You can add input arguments if you wish
+#NOTE:Done
 def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 	global global_step, idx_to_class
 
@@ -276,9 +283,7 @@ def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 	for i, (input, target) in enumerate(train_loader):
 		# measure data loading time
 		data_time.update(time.time() - end)
-		# Set random seed
-		# np.random.seed()
-
+		
 		target = target.type(torch.FloatTensor).cuda(async=True)
 		input_var = input
 		target_var = target
@@ -335,6 +340,8 @@ def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 			tb_logger, vis_logger = loggers
 			# Plot the training loss
 			tb_logger.add_scalar('train/loss', loss.item(), global_step)
+			tb_logger.add_scalar('train/mAP', m1[0], global_step)
+			tb_logger.add_scalar('train/mean_recall', m2[0], global_step)
 			# Plot the heatmaps and the images
 			if i == 0 or i == len(train_loader)//2:
 				# Get the image 
@@ -354,6 +361,8 @@ def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 					heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
 					vis_logger.heatmap(heatmap.squeeze(), opts={'title':heatmap_tag})
 		global_step += 1
+		#NOTE:Done
+		#NOTE:Done
 		# End of train()
 
 
@@ -435,7 +444,11 @@ def validate(val_loader, model, criterion, epoch, loggers=None):
 				for idx, heatmap in enumerate(gt_heatmaps):
 					heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
 					vis_logger.heatmap(heatmap.squeeze(), opts={'title':heatmap_tag})
-
+		#NOTE:Done
+		#NOTE:Done
+	if args.vis:
+		tb_logger.add_scalar('val/mAP', avg_m1.avg(), epoch)
+		tb_logger.add_scalar('val/mean_recall', avg_m2.avg(), epoch)
 	print(' * Metric1 {avg_m1.avg:.3f} Metric2 {avg_m2.avg:.3f}'.format(
 		avg_m1=avg_m1, avg_m2=avg_m2))
 
@@ -443,6 +456,7 @@ def validate(val_loader, model, criterion, epoch, loggers=None):
 
 
 # TODO: You can make changes to this function if you wish (not necessary)
+# NOTE:Done
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 	dir_name = 'lr_{}_b_{}'.format(args.lr, args.batch_size)
 	torch.save(state, filename)
@@ -479,33 +493,47 @@ def adjust_learning_rate(optimizer, epoch):
 def metric1(output, target):
 	# TODO: Ignore for now - proceed till instructed
 	prob_scores = torch.sigmoid(output)
-	APs = np.zeros(output.shape[1])
-	# import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
-	for idx, cls_index in enumerate(range(output.shape[1])):
-		cls_outputs, cls_targets = prob_scores[:,cls_index], target[:,cls_index]
-		if torch.sum(cls_targets) == 0:
-			APs[idx] = 0
-		else:
-			APs[idx] = sklearn.metrics.average_precision_score(cls_targets, cls_outputs, average=None)
-
-		# if np.isnan(APs[idx]):
-		# 	import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
-	mAP = np.mean(APs)
+	# Filter the columns that don't have any true instance
+	cls_counts = torch.sum(target, dim=0)
+	valid_classes = cls_counts > 0
+	filtered_scores = prob_scores[:,valid_classes]
+	filtered_targets = target[:,valid_classes]
+	mAP = sklearn.metrics.average_precision_score(filtered_targets, filtered_scores)
 	#NOTE:Done
+
+	# ---------------------------- mAP keeping classes with no instance as 0/1 ----------------------------
+	# prob_scores = torch.sigmoid(output)
+	# APs = np.zeros(output.shape[1])	
+	# # import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
+	# for idx, cls_index in enumerate(range(output.shape[1])):
+	# 	cls_outputs, cls_targets = prob_scores[:,cls_index], target[:,cls_index]
+	# 	if torch.sum(cls_targets) == 0:
+	# 		APs[idx] = 0
+	# 	else:
+	# 		APs[idx] = sklearn.metrics.average_precision_score(cls_targets, cls_outputs, average=None)
+
+	# 	# if np.isnan(APs[idx]):
+	# 	# 	import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
+	# mAP = np.mean(APs)
+	# ------------------------------------------------------------------------------------------------------
 	return [mAP]
 
 
 def metric2(output, target):
 	#TODO: Ignore for now - proceed till instructed
+	THRESH = 0.3
 	prob_scores = torch.sigmoid(output)
 	# Filter the columns that don't have any true instance
 	cls_counts = torch.sum(target, dim=0)
 	valid_classes = cls_counts > 0
 	filtered_scores = prob_scores[:,valid_classes]
 	filtered_targets = target[:,valid_classes]
-	mAP = sklearn.metrics.average_precision_score(filtered_targets, filtered_scores, average='weighted')
+	preds = np.zeros(prob_scores.shape, dtype=np.int)
+	preds[prob_scores >= THRESH] = 1
+	recalls = sklearn.metrics.recall_score(target, preds)
+	mRecall = np.mean(recalls)
 	#NOTE:Done
-	return [mAP]
+	return [mRecall]
 
 
 if __name__ == '__main__':

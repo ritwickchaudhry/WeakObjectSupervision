@@ -22,6 +22,8 @@ from utils.blob import prep_im_for_blob, im_list_to_blob
 def get_weak_minibatch(roidb, num_classes):
     """Given a roidb, construct a minibatch sampled from it."""
     num_images = len(roidb)
+    assert num_images == 1, "Assumed one image"
+
     # Sample random scales to use for each image in this batch
     random_scale_inds = npr.randint(0, high=len(cfg.TRAIN.SCALES),
                                     size=num_images)
@@ -55,16 +57,27 @@ def get_weak_minibatch(roidb, num_classes):
         #So blobs['labels'] should contain a 1x20 binary vector for each image
 
         # Add to RoIs blob
+        # Sample only max number of RoIs
+        # assert im_rois.shape[1] >= rois_per_image, "Fewer RoIs found"
+        im_rois = im_rois[:, :rois_per_image] # Even if ROIs are lesser, numpy handles it
         rois = _project_im_rois(im_rois, im_scales[im_i])
         batch_ind = im_i * np.ones((rois.shape[0], 1))
         rois_blob_this_image = np.hstack((batch_ind, rois))
         rois_blob = np.vstack((rois_blob, rois_blob_this_image))
 
         # Add to labels, bbox targets, and bbox loss blobs
-        labels_blob = np.hstack((labels_blob, labels))
-        bbox_targets_blob = np.vstack((bbox_targets_blob, bbox_targets))
-        bbox_inside_blob = np.vstack((bbox_inside_blob, bbox_inside_weights))
+        gt_roi_indices = np.where(roidb[im_i]['gt_classes'] != 0)[0]
+        gt_labels = roidb[im_i]['gt_classes'][gt_roi_indices]
+        labels = np.zeros((1,num_classes), dtype=np.int)
+        labels[gt_labels] = 1
+        labels_blob = np.vstack((labels_blob, labels))
+        # labels_blob = np.hstack((labels_blob, labels))
+        # bbox_targets_blob = np.vstack((bbox_targets_blob, bbox_targets))
+        # bbox_inside_blob = np.vstack((bbox_inside_blob, bbox_inside_weights))
         # all_overlaps = np.hstack((all_overlaps, overlaps))
+
+        #NOTE:Done
+        #NOTE:Done
 
     blobs['rois'] = rois_blob
     blobs['labels'] = labels_blob
