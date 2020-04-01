@@ -7,6 +7,7 @@ sys.path.insert(0, 'faster_rcnn')
 import sklearn
 import sklearn.metrics
 
+import cv2
 import numpy as np
 
 import torch
@@ -99,6 +100,12 @@ parser.add_argument(
 	action='store_true',
 	help='evaluate model on validation set')
 parser.add_argument(
+	'-i',
+	'--infer',
+	dest='infer',
+	action='store_true',
+	help='infer model on test set')
+parser.add_argument(
 	'--pretrained',
 	dest='pretrained',
 	action='store_true',
@@ -126,10 +133,21 @@ idx_to_class = {}
 # def worker_init_fn(worker_id):                                                          
 # 	np.random.seed(np.random.get_state()[1][0] + worker_id)
 
+# Superimposing Heatmaps
+# https://medium.com/@stepanulyanin/implementing-grad-cam-in-pytorch-ea0937c31e82
+def superimpose(img, heatmap):	
+	# img - CHW, heatmap - HW
+	heatmap = cv2.resize(heatmap, (img.shape[2], img.shape[1]))
+	heatmap = np.uint8(255 * heatmap)
+	heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+	superimposed_img = cv2.addWeighted(heatmap, 0.5, np.uint8(img.transpose((1,2,0))*255.0), 0.5, 0)
+	# superimposed_img = heatmap.transpose((2,0,1)) * 0.3 + img
+	return superimposed_img.transpose((2,0,1))
+
 # Set random seed
 SEED = 42
-np.random.seed(42)
-torch.manual_seed(42)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 
 def main():
 	global args, best_prec1, global_step, idx_to_class
@@ -221,6 +239,24 @@ def main():
 	if args.evaluate:
 		validate(val_loader, model, criterion, 0, loggers=None)
 		return
+	
+	if args.infer:
+		infer_loader = torch.utils.data.DataLoader(
+		IMDBDataset(
+			test_imdb,
+			transforms.Compose([
+				transforms.Resize((384, 384)),
+				transforms.ToTensor(),
+				normalize,
+			])),
+		batch_size=args.batch_size,
+		shuffle=True,
+		num_workers=args.workers,
+		pin_memory=True)
+		import visdom
+		vis_logger = visdom.Visdom(server='0.0.0.0',port='8080')
+		infer(infer_loader, model, vis_logger=vis_logger)
+		return
 
 	# TODO: Create loggers for visdom and tboard
 	# TODO: You can pass the logger objects to train(), make appropriate
@@ -291,9 +327,16 @@ def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 		# TODO: Get output from model
 		# TODO: Perform any necessary functions on the output
 		# TODO: Compute loss using ``criterion``
-		score_logits = model(input_var)
-		pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=(1,1))
-		imoutput = torch.squeeze(pool_layer)
+		score_logits = model(input_var) # B x K x H x W
+		if args.arch == 'localizer_alexnet':
+			pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=(1,1))
+			imoutput = torch.squeeze(pool_layer)
+		elif args.arch == 'localizer_alexnet_robust':
+			# Want to do a soft-maximum instead of hard max
+			scores_flattened = score_logits.view(score_logits.shape[0], score_logits.shape[1], -1)
+			weights = F.softmax(scores_flattened, dim=2)
+			imoutput = torch.sum(scores_flattened * weights, dim=2)
+
 		loss = criterion(imoutput, target_var)
 		#NOTE:Done
 		#NOTE:Done
@@ -349,17 +392,27 @@ def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 				gt_classes = np.where(target[0].cpu().numpy() == 1)[0]
 				# import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
 				gt_heatmaps = torch.sigmoid(score_logits).detach().cpu().numpy()[0, gt_classes][:,None,:,:]
+				
 				# Tensorboard log
 				img_step = 0 if i == 0 else 1
-				tb_logger.add_image('train/images_{}'.format(img_step), img, global_step=epoch, dataformats='CHW')
-				tb_logger.add_images('train/heatmaps_{}'.format(img_step), gt_heatmaps, global_step=epoch, dataformats='NCHW')
-				# Visdom logging
-				img_tag = 'train_imgs_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
-				heatmap_base_tag = 'train_heatmaps_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
-				vis_logger.image(np.array(img*255.0, dtype=np.uint8), opts={'title':img_tag})
-				for idx, heatmap in enumerate(gt_heatmaps):
-					heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
-					vis_logger.heatmap(heatmap.squeeze(), opts={'title':heatmap_tag})
+					
+				# Visdom log
+				if epoch in [1, 15, 29]:
+					img_tag = 'train_imgs_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
+					superimposed_tag = 'train_superimposed_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
+					vis_logger.image(np.array(img*255.0, dtype=np.uint8), opts={'title':img_tag})
+					heatmap_base_tag = 'train_heatmaps_epoch_{}_iter_{}_batchindex_{}_'.format(epoch, global_step, i)
+					superimposed_imgs = np.zeros([gt_heatmaps.shape[0]]+list(img.shape), dtype=np.uint8)
+					for idx, heatmap in enumerate(gt_heatmaps):
+						heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
+						vis_logger.heatmap(np.flipud(heatmap.squeeze()), opts={'title':heatmap_tag})
+						superimposed_imgs[idx] = superimpose(img, heatmap.squeeze())
+					vis_logger.images(superimposed_imgs, opts={'title':superimposed_tag})
+
+					tb_logger.add_image('train/images_{}'.format(img_step), img, global_step=epoch, dataformats='CHW')
+					tb_logger.add_images('train/superimposed_{}'.format(img_step), superimposed_imgs, global_step=epoch, dataformats='NCHW')
+					tb_logger.add_images('train/heatmaps_{}'.format(img_step), gt_heatmaps, global_step=epoch, dataformats='NCHW')
+
 		global_step += 1
 		#NOTE:Done
 		#NOTE:Done
@@ -424,8 +477,6 @@ def validate(val_loader, model, criterion, epoch, loggers=None):
 		if args.vis:
 			assert loggers is not None
 			tb_logger, vis_logger = loggers
-			# Plot the training loss
-			tb_logger.add_scalar('val/loss', loss.item(), global_step)
 			# Plot the heatmaps and the images
 			if i == 0 or i == len(val_loader)//2:
 				# Get the image 
@@ -435,24 +486,72 @@ def validate(val_loader, model, criterion, epoch, loggers=None):
 				gt_heatmaps = torch.sigmoid(score_logits).detach().cpu().numpy()[0, gt_classes][:,None,:,:]
 				# Tensorboard log
 				img_step = 0 if i == 0 else 1
-				tb_logger.add_image('val/images_{}'.format(img_step), img, global_step=epoch, dataformats='CHW')
-				tb_logger.add_images('val/heatmaps_{}'.format(img_step), gt_heatmaps, global_step=epoch, dataformats='NCHW')
-				# Visdom log
-				img_tag = 'val_imgs_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
-				heatmap_base_tag = 'val_heatmaps_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
-				vis_logger.image(np.array(img*255.0, dtype=np.uint8), opts={'title':img_tag})
-				for idx, heatmap in enumerate(gt_heatmaps):
-					heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
-					vis_logger.heatmap(heatmap.squeeze(), opts={'title':heatmap_tag})
+
+				if epoch in [1, 15, 29]:
+					# Visdom log
+					img_tag = 'val_imgs_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
+					superimposed_tag = 'val_superimposed_epoch_{}_iter_{}_batchindex_{}'.format(epoch, global_step, i)
+					vis_logger.image(np.array(img*255.0, dtype=np.uint8), opts={'title':img_tag})
+					heatmap_base_tag = 'val_heatmaps_epoch_{}_iter_{}_batchindex_{}_'.format(epoch, global_step, i)
+					superimposed_imgs = np.zeros([gt_heatmaps.shape[0]]+list(img.shape), dtype=np.uint8)
+					for idx, heatmap in enumerate(gt_heatmaps):
+						heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
+						vis_logger.heatmap(np.flipud(heatmap.squeeze()), opts={'title':heatmap_tag})
+						superimposed_imgs[idx] = superimpose(img, heatmap.squeeze())
+					vis_logger.images(superimposed_imgs, opts={'title':superimposed_tag})
+
+					tb_logger.add_image('val/images_{}'.format(img_step), img, global_step=epoch, dataformats='CHW')
+					tb_logger.add_images('val/superimposed_{}'.format(img_step), superimposed_imgs, global_step=epoch, dataformats='NCHW')
+					tb_logger.add_images('val/heatmaps_{}'.format(img_step), gt_heatmaps, global_step=epoch, dataformats='NCHW')
+
 		#NOTE:Done
 		#NOTE:Done
 	if args.vis:
-		tb_logger.add_scalar('val/mAP', avg_m1.avg(), epoch)
-		tb_logger.add_scalar('val/mean_recall', avg_m2.avg(), epoch)
+		# Plot the val loss
+		tb_logger.add_scalar('val/loss', losses.avg, epoch)
+		tb_logger.add_scalar('val/mAP', avg_m1.avg, epoch)
+		tb_logger.add_scalar('val/mean_recall', avg_m2.avg, epoch)
 	print(' * Metric1 {avg_m1.avg:.3f} Metric2 {avg_m2.avg:.3f}'.format(
 		avg_m1=avg_m1, avg_m2=avg_m2))
 
 	return avg_m1.avg, avg_m2.avg
+
+def infer(test_loader, model, vis_logger=None):
+	# switch to evaluate mode
+	model.eval()
+
+	end = time.time()
+	for i, (input, target) in enumerate(test_loader):
+		target = target.type(torch.FloatTensor).cuda(async=True)
+		input_var = input
+		target_var = target
+
+		score_logits = model(input_var)
+		pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=1)
+		imoutput = torch.squeeze(pool_layer)
+
+		assert vis_logger is not None
+		# Plot the heatmaps and the images
+		for idx in range(10):
+			# Get the image 
+			img = process_image(input[idx].cpu().numpy())
+			gt_classes = np.where(target[idx].cpu().numpy() == 1)[0]
+			# import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
+			gt_heatmaps = torch.sigmoid(score_logits).detach().cpu().numpy()[idx, gt_classes][:,None,:,:]
+
+			# Visdom log
+			img_tag = 'test_imgs_batchindex_{}'.format(idx)
+			superimposed_tag = 'test_superimposed_batchindex_{}'.format(idx)
+			vis_logger.image(np.array(img*255.0, dtype=np.uint8), opts={'title':img_tag})
+			heatmap_base_tag = 'test_heatmaps_batchindex_{}_'.format(idx)
+			superimposed_imgs = np.zeros([gt_heatmaps.shape[0]]+list(img.shape), dtype=np.uint8)
+			for idx, heatmap in enumerate(gt_heatmaps):
+				heatmap_tag = heatmap_base_tag + idx_to_class[gt_classes[idx]]
+				vis_logger.heatmap(np.flipud(heatmap.squeeze()), opts={'title':heatmap_tag})
+				superimposed_imgs[idx] = superimpose(img, heatmap.squeeze())
+			vis_logger.images(superimposed_imgs, opts={'title':superimposed_tag})
+		
+		break # Need only one batch
 
 
 # TODO: You can make changes to this function if you wish (not necessary)
@@ -521,16 +620,16 @@ def metric1(output, target):
 
 def metric2(output, target):
 	#TODO: Ignore for now - proceed till instructed
-	THRESH = 0.3
+	THRESH = 0.5
 	prob_scores = torch.sigmoid(output)
 	# Filter the columns that don't have any true instance
 	cls_counts = torch.sum(target, dim=0)
 	valid_classes = cls_counts > 0
-	filtered_scores = prob_scores[:,valid_classes]
 	filtered_targets = target[:,valid_classes]
-	preds = np.zeros(prob_scores.shape, dtype=np.int)
+	preds = torch.zeros(prob_scores.shape, dtype=torch.int, device=prob_scores.device)
 	preds[prob_scores >= THRESH] = 1
-	recalls = sklearn.metrics.recall_score(target, preds)
+	filtered_preds = preds[:,valid_classes]
+	recalls = sklearn.metrics.recall_score(filtered_targets, filtered_preds, average=None)
 	mRecall = np.mean(recalls)
 	#NOTE:Done
 	return [mRecall]

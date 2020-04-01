@@ -59,9 +59,9 @@ def get_weak_minibatch(roidb, num_classes):
         # Add to RoIs blob
         # Sample only max number of RoIs
         # assert im_rois.shape[1] >= rois_per_image, "Fewer RoIs found"
-        im_rois = im_rois[:, :rois_per_image] # Even if ROIs are lesser, numpy handles it
+        im_rois = im_rois[:rois_per_image,:] # Even if ROIs are lesser, numpy handles it
         rois = _project_im_rois(im_rois, im_scales[im_i])
-        batch_ind = im_i * np.ones((rois.shape[0], 1))
+        batch_ind = im_i * np.ones((rois.shape[0], 1), dtype=int)
         rois_blob_this_image = np.hstack((batch_ind, rois))
         rois_blob = np.vstack((rois_blob, rois_blob_this_image))
 
@@ -69,7 +69,7 @@ def get_weak_minibatch(roidb, num_classes):
         gt_roi_indices = np.where(roidb[im_i]['gt_classes'] != 0)[0]
         gt_labels = roidb[im_i]['gt_classes'][gt_roi_indices]
         labels = np.zeros((1,num_classes), dtype=np.int)
-        labels[gt_labels] = 1
+        labels[0,gt_labels - 1] = 1
         labels_blob = np.vstack((labels_blob, labels))
         # labels_blob = np.hstack((labels_blob, labels))
         # bbox_targets_blob = np.vstack((bbox_targets_blob, bbox_targets))
@@ -250,16 +250,18 @@ def _vis_minibatch(im_blob, rois_blob, labels_blob, overlaps):
         rois = rois_blob[i, :]
         im_ind = rois[0]
         roi = rois[1:]
-        im = im_blob[im_ind, :, :, :].transpose((1, 2, 0)).copy()
+        # im = im_blob[im_ind, :, :, :].transpose((1, 2, 0)).copy()
+        im = im_blob[im_ind, :, :, :].copy()
         im += cfg.PIXEL_MEANS
         im = im[:, :, (2, 1, 0)]
         im = im.astype(np.uint8)
-        cls = labels_blob[i]
+        # cls = labels_blob[i]
         plt.imshow(im)
-        print 'class: ', cls, ' overlap: ', overlaps[i]
+        # print 'class: ', cls, ' overlap: ', overlaps[i]
         plt.gca().add_patch(
             plt.Rectangle((roi[0], roi[1]), roi[2] - roi[0],
                           roi[3] - roi[1], fill=False,
                           edgecolor='r', linewidth=3)
             )
-        plt.show()
+        # plt.savefig('test.png')
+        # plt.show()

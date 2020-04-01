@@ -71,27 +71,35 @@ class WSDDN(nn.Module):
 			nn.ReLU(inplace=True)
 		)
 
-		self.roi_pool = RoIPool(7, 7, 1.0/16)
+		self.roi_pool = RoIPool(6, 6, 1.0/16)
 
-		self.fc6 = nn.Sequential(
-			nn.Linear(256*7*7, 4096),
-			nn.ReLU(),
-			nn.Dropout()
+		self.classifier = nn.Sequential(
+			nn.Dropout(p=0.5),
+            nn.Linear(256 * 6 * 6, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
 		)
+		# self.fc6 = nn.Sequential(
+		# 	nn.Linear(256*7*7, 4096),
+		# 	nn.ReLU(),
+		# 	nn.Dropout()
+		# )
 
-		self.fc7 = nn.Sequential(
-			nn.Linear(4096, 4096),
-			nn.ReLU(),
-			nn.Dropout()
-		)
+		# self.fc7 = nn.Sequential(
+		# 	nn.Linear(4096, 4096),
+		# 	nn.ReLU(),
+		# 	nn.Dropout()
+		# )
 
 		self.fc8c = nn.Linear(4096, self.n_classes)
 		self.fc8d = nn.Linear(4096, self.n_classes)
 		# NOTE:Done
 
 		# loss
-		# self.cross_entropy = None
-		self.cross_entropy = nn.BCELoss()
+		self.criterion = nn.BCELoss()
+		self.cross_entropy = None
 
 		# for log
 		self.debug = debug
@@ -118,10 +126,12 @@ class WSDDN(nn.Module):
 		# Checkout faster_rcnn.py for inspiration
 
 		features = self.features(im_data) # B x 256 x H x W
+		# import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
 		roi_feats = self.roi_pool(features, rois) # N_roi x 256 x 7 x 7
 		roi_feats = roi_feats.view(roi_feats.shape[0], -1) # N_roi x 256*7*7
-		roi_feats = self.fc6(roi_feats) # N_roi x 4096
-		roi_feats = self.fc7(roi_feats) # N_roi x 4096
+		# roi_feats = self.fc6(roi_feats) # N_roi x 4096
+		# roi_feats = self.fc7(roi_feats) # N_roi x 4096
+		roi_feats = self.classifier(roi_feats)
 		roi_class_logits = self.fc8c(roi_feats) # N_roi x 20
 		roi_det_logits = self.fc8d(roi_feats) # N_roi x 20
 
@@ -133,15 +143,16 @@ class WSDDN(nn.Module):
 		roi_class_probs = F.softmax(roi_class_logits, dim=1)
 		roi_det_probs = F.softmax(roi_class_logits, dim=0)
 
-		cls_prob = roi_class_probs * roi_det_probs # num_images x rois_per_image x 20
-		
+		cls_prob = roi_class_probs * roi_det_probs # num_images * rois_per_image x 20
+		# import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
 		# ------------------------------------------ Batched Version ------------------------------------------
 		# cls_prob = roi_probs.view(-1, self.n_classes)
 		# ------------------------------------------ Batched Version ------------------------------------------
 
 		if self.training:
 			label_vec = torch.from_numpy(gt_vec).cuda().float()
-			label_vec = label_vec.view(self.n_classes, -1)
+			# label_vec = label_vec.view(self.n_classes, -1)
+			label_vec = label_vec.view(-1, self.n_classes)
 			self.cross_entropy = self.build_loss(cls_prob, label_vec)
 		return cls_prob
 
@@ -157,9 +168,10 @@ class WSDDN(nn.Module):
 		#output of forward()
 		#Checkout forward() to see how it is called 
 
-		cls_prob = torch.sum(cls_prob, dim=0)
-		cls_prob = torch.clamp(cls_prob, min=0.0, max=1.0)
-		bceloss = self.loss(cls_prob, label_vec)
+		final_cls_prob = torch.sum(cls_prob, dim=0, keepdim=True)
+		final_cls_prob = torch.clamp(final_cls_prob, max=1.0)
+		# cls_prob = torch.clamp(cls_prob, min=0.0, max=1.0)
+		bceloss = self.criterion(final_cls_prob, label_vec)
 		#NOTE: Done
 		return bceloss
 

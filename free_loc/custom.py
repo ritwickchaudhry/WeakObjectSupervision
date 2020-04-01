@@ -1,5 +1,6 @@
 import torch.utils.data as data
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 model_urls = {
 		'alexnet': 'https://download.pytorch.org/models/alexnet-owt-4df8aa71.pth',
@@ -107,33 +108,46 @@ class LocalizerAlexNet(nn.Module):
 		return x
 
 
-
-
 class LocalizerAlexNetRobust(nn.Module):
 	def __init__(self, num_classes=20):
 		super(LocalizerAlexNetRobust, self).__init__()
 		#TODO: Ignore for now until instructed
+		self.features = nn.Sequential(
+			nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+			nn.ReLU(inplace=True),
+			nn.MaxPool2d(kernel_size=3, stride=2),
+			nn.Conv2d(64, 192, kernel_size=5, padding=2),
+			nn.ReLU(inplace=True),
+			nn.MaxPool2d(kernel_size=3, stride=2),
+			nn.Conv2d(192, 384, kernel_size=3, padding=1),
+			nn.ReLU(inplace=True),
+			nn.Conv2d(384, 256, kernel_size=3, padding=1),
+			nn.ReLU(inplace=True),
+			nn.Conv2d(256, 256, kernel_size=3, padding=1),
+			nn.ReLU(inplace=True)
+		)
 
-
-
-
-
-
-
-
+		self.classifier = nn.Sequential(
+			nn.Conv2d(256, 256, kernel_size=3),
+			nn.ReLU(inplace=True),
+			# nn.Dropout(p=0.5),
+			nn.Conv2d(256, 256, kernel_size=1),
+			nn.ReLU(inplace=True),
+			# nn.Dropout(p=0.5),
+			nn.Conv2d(256, num_classes, kernel_size=1)
+		)
+		#NOTE: Done
 
 	def forward(self, x):
 		#TODO: Ignore for now until instructed
-
-
-
-
-
-
-
-
-
-
+		x = self.features(x)
+		x = self.classifier(x)
+		if self.training:
+			# Randomly drop out elements
+			mask = x.new_ones(x.shape)
+			mask = F.dropout(mask, p=0.75, training=True)
+			x[mask == 0] = -40.0
+		#NOTE: Done
 		return x
 
 
@@ -175,15 +189,24 @@ def localizer_alexnet_robust(pretrained=False, **kwargs):
 		pretrained (bool): If True, returns a model pre-trained on ImageNet
 	"""
 	model = LocalizerAlexNetRobust(**kwargs)
-	#TODO: Ignore for now until instructed
-
-
-
-
-
-
-
-
+	if pretrained:
+		# Copy the weights of the feature part directly (there's an extra maxpool)
+		# in the torchvision alexnet, but that doesn't have any params, so it's fine
+		alex_net = model_zoo.load_url(model_urls['alexnet'])
+		feat_keys = [k for k in alex_net if 'features' in k]
+		feature_weights = {'.'.join(k.split('.')[1:]):alex_net[k] for k in feat_keys}
+		# import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
+		model.features.load_state_dict(feature_weights)
+	else:
+		# Initialise the first 5 convs with xavier
+		feat_conv_layers = [model.features[i] for i in [0,3,6,8,10]]
+		for conv_layer in feat_conv_layers:
+			nn.init.xavier_normal_(conv_layer.weight)
+	# Initialise the weights of classifier with xavier
+	classifier_conv_layers = [model.classifier[i] for i in [0,2,4]]
+	for conv_layer in classifier_conv_layers:
+		nn.init.xavier_normal_(conv_layer.weight)
+	#NOTE: Done
 	return model
 
 

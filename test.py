@@ -156,12 +156,9 @@ def test_net(name,
         if visualize and np.random.rand() < 0.01:
             # TODO: Visualize here using tensorboard
             # TODO: use the logger that is an argument to this function
+            assert logger is not None
+            
             print('Visualizing')
-
-
-
-
-
 
     with open(det_file, 'wb') as f:
         cPickle.dump(all_boxes, f, cPickle.HIGHEST_PROTOCOL)
