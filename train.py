@@ -42,7 +42,7 @@ cfg_file = 'experiments/cfgs/wsddn.yml'
 pretrained_model = 'data/pretrained_model/alexnet_imagenet.npy'
 output_dir = 'models/saved_model'
 visualize = True
-loss_vis_interval = 500
+loss_vis_interval = 100
 vis_interval = 5000
 
 start_step = 0
@@ -79,6 +79,7 @@ roidb = imdb.roidb
 # load test imdb
 test_imdb = get_imdb(test_imdb_name)
 test_imdb.competition_mode(on=True)
+# thresh = 0.0
 thresh = 0.0001
 
 data_layer = RoIDataLayer(roidb, imdb.num_classes)
@@ -200,7 +201,7 @@ for step in range(start_step, end_step + 1):
         net.eval()
         # call test_net
         if visualize and use_tensorboard:
-            aps = test_net('train_eval', net, test_imdb, thresh=thresh, visualize=True, logger=tb_logger, step=None)
+            aps = test_net('train_eval', net, test_imdb, thresh=thresh, visualize=True, logger=tb_logger, step=step)
         else:
             aps = test_net('train_eval', net, test_imdb, thresh=thresh, visualize=False, logger=None, step=None)
         aps = np.array(aps)
@@ -210,10 +211,10 @@ for step in range(start_step, end_step + 1):
                     win='Test mAP', update='append', opts={'markers':True})
         if visualize and use_tensorboard:
             print('Logging to Tensorboard')
-            tb_logger.add_scalar('test/mAP', np.mean(aps))
+            tb_logger.add_scalar('test/mAP', np.mean(aps), global_step=step)
             class_names = list(imdb._classes)
             results = dict(zip(class_names, list(aps)))
-            tb_logger.add_scalars('test/APs', results)
+            tb_logger.add_scalars('test/APs', results, global_step=step)
         net.train()
 
     # if visualize and step % vis_interval == 0:

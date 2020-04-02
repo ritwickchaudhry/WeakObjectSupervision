@@ -135,8 +135,8 @@ def test_net(name,
                 .astype(np.float32, copy=False)
             keep = nms(cls_dets, cfg.TEST.NMS)
             cls_dets = cls_dets[keep, :]
-            if visualize:
-                im2show = vis_detections(im2show, imdb.classes[j], cls_dets)
+            # if visualize:
+            #     im2show = vis_detections(im2show, imdb.classes[j], cls_dets)
             all_boxes[j][i] = cls_dets
 
         # Limit to max_per_image detections *over all classes*
@@ -157,8 +157,13 @@ def test_net(name,
             # TODO: Visualize here using tensorboard
             # TODO: use the logger that is an argument to this function
             assert logger is not None
-            
+            # Skip background class
+            for j in xrange(1, imdb.num_classes + 1):
+                im2show = vis_detections(im2show, imdb._classes[j-1], all_boxes[j][i], thresh=0.01)
             print('Visualizing')
+            # import traceback as tb; import code; tb.print_stack(); namespace = globals().copy();namespace.update(locals());code.interact(local=namespace)
+            logger.add_image('test/detections', im2show[:,:,[2,1,0]], dataformats='HWC', global_step=step+i)
+
 
     with open(det_file, 'wb') as f:
         cPickle.dump(all_boxes, f, cPickle.HIGHEST_PROTOCOL)

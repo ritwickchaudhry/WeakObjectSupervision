@@ -98,7 +98,7 @@ class WSDDN(nn.Module):
 		# NOTE:Done
 
 		# loss
-		self.criterion = nn.BCELoss()
+		self.criterion = nn.BCELoss(size_average=False)
 		self.cross_entropy = None
 
 		# for log
