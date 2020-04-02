@@ -250,7 +250,7 @@ def main():
 				normalize,
 			])),
 		batch_size=args.batch_size,
-		shuffle=True,
+		shuffle=False,
 		num_workers=args.workers,
 		pin_memory=True)
 		import visdom
@@ -418,7 +418,6 @@ def train(train_loader, model, criterion, optimizer, epoch, loggers=None):
 		#NOTE:Done
 		# End of train()
 
-
 def validate(val_loader, model, criterion, epoch, loggers=None):
 	global global_step, idx_to_class
 
@@ -440,8 +439,15 @@ def validate(val_loader, model, criterion, epoch, loggers=None):
 		# TODO: Perform any necessary functions on the output
 		# TODO: Compute loss using ``criterion``
 		score_logits = model(input_var)
-		pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=1)
-		imoutput = torch.squeeze(pool_layer)
+		if args.arch == 'localizer_alexnet':
+			pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=(1,1))
+			imoutput = torch.squeeze(pool_layer)
+		elif args.arch == 'localizer_alexnet_robust':
+			# Want to do a soft-maximum instead of hard max
+			scores_flattened = score_logits.view(score_logits.shape[0], score_logits.shape[1], -1)
+			weights = F.softmax(scores_flattened, dim=2)
+			imoutput = torch.sum(scores_flattened * weights, dim=2)
+		
 		loss = criterion(imoutput, target_var)
 		#NOTE:Done
 		#NOTE:Done
@@ -527,12 +533,18 @@ def infer(test_loader, model, vis_logger=None):
 		target_var = target
 
 		score_logits = model(input_var)
-		pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=1)
-		imoutput = torch.squeeze(pool_layer)
+		if args.arch == 'localizer_alexnet':
+			pool_layer = torch.nn.functional.adaptive_max_pool2d(score_logits, output_size=(1,1))
+			imoutput = torch.squeeze(pool_layer)
+		elif args.arch == 'localizer_alexnet_robust':
+			# Want to do a soft-maximum instead of hard max
+			scores_flattened = score_logits.view(score_logits.shape[0], score_logits.shape[1], -1)
+			weights = F.softmax(scores_flattened, dim=2)
+			imoutput = torch.sum(scores_flattened * weights, dim=2)
 
 		assert vis_logger is not None
 		# Plot the heatmaps and the images
-		for idx in range(10):
+		for idx in range(15):
 			# Get the image 
 			img = process_image(input[idx].cpu().numpy())
 			gt_classes = np.where(target[idx].cpu().numpy() == 1)[0]
